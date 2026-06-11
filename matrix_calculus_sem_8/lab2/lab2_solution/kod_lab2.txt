@@ -1,0 +1,221 @@
+import random
+import math
+import numpy as np
+import copy
+import time
+import matplotlib.pyplot as plt
+
+def lu_factorization(A, pivoting=True):
+    n = len(A)
+    P = [i for i in range(n)]
+    A = np.array(A, dtype=np.float32)
+    L, U = np.array([[0.0 for _ in range(n)] for _ in range(n)]), np.copy(A)
+    for i in range(n):
+        L[i, i] = 1.0
+    for i in range(n):
+        if pivoting or np.isclose(U[i, i], 0.0):
+            if pivoting:
+                pivot_idx = i + np.argmax(np.abs(U[i:, i]))
+            else:
+                pivot_idx = i + np.where(~np.isclose(np.abs(U[i:, i]), 0.0))[0][0]
+        
+            if pivot_idx != i:
+                U[[i, pivot_idx]] = U[[pivot_idx, i]]
+                L[[i, pivot_idx], :i] = L[[pivot_idx, i], :i]
+                P[i], P[pivot_idx] = P[pivot_idx], P[i]
+
+            assert not np.isclose(U[i, i], 0.0)
+
+        for j in range(i+1, n):
+            factor = U[j][i]/U[i, i]
+            U[j, :] -= factor * U[i, :]
+            L[j, i] = factor
+
+    P = np.array(P)
+    P_res = np.zeros((P.size, P.max() + 1))
+    P_res[np.arange(P.size), P] = 1
+    return P_res, L , U
+
+def print_matrix(M):
+    for row in M:
+        row_rounded = [round(x, 2) for x in row]
+        row_no_negative_zeros = [0.0 if math.isclose(x, 0.0) else x for x in row_rounded]
+        print(" ".join(f"{x:.2f}" for x in row_no_negative_zeros))
+    print()
+
+def divide_row(row, k, M):
+    n = len(M)
+    for j in range(n):
+        M[row][j] /= k
+
+def swap_rows(row1, row2, M):
+    n = len(M)
+    for j in range(n):
+        M[row1][j], M[row2][j] = M[row2][j], M[row1][j]
+
+def add_scaled_row_to_another(row1, row2, k, M):
+    n = len(M)
+    for j in range(n):
+        M[row2][j] += M[row1][j] * k
+
+def gauss_elimination(M, pivoting=True, normalize=True):
+    n = len(M)
+    for j in range(n): 
+        if pivoting:
+            maxi, pivot_idx = 0.0, 0
+            for i in range(j, n):
+                if abs(M[i][j]) > maxi :
+                    maxi, pivot_idx = abs(M[i][j]), i
+            if pivot_idx != j: 
+                swap_rows(j, pivot_idx, M)
+        if normalize:
+            divide_row(j, M[j][j], M) 
+
+        for k in range(j + 1, n):
+            assert not np.isclose(M[j][j], 0)
+            add_scaled_row_to_another(j, k, -M[k][j]/M[j][j], M) 
+
+
+def gauss_numpy(A, pivoting=True, normalize=True, b=None):
+    n = len(A)
+    A = np.array(A, dtype=np.float64)
+    if b is not None:
+        b = np.array(b, dtype=np.float64)
+
+    for i in range(n):
+        if pivoting:
+            pivot_idx = i + np.argmax(np.abs(A[i:, i]))
+            if pivot_idx != i:
+                A[[i, pivot_idx]] = A[[pivot_idx, i]]
+                if b is not None:
+                    b[i], b[pivot_idx] = b[pivot_idx], b[i]
+        
+        pivot_val = A[i, i]
+        if normalize:
+            A[i, :] /= pivot_val
+            if b is not None:
+                b[i] /= pivot_val
+            pivot_val = 1.0
+
+        for j in range(i+1, n):
+            factor = A[j][i] / pivot_val
+            A[j, :] -= factor * A[i, :]
+            if b is not None:
+                b[j] -= factor * b[i]
+    return A, b
+
+def forward_substitution(L, b):
+    n = L.shape[0]
+    y = np.zeros_like(b, dtype=np.float64)
+    for i in range(n):
+        y[i] = b[i] - np.dot(L[i, :i], y[:i])
+    return y
+
+def back_substitution(U, b):
+    n = U.shape[0]
+    x = np.zeros_like(b, dtype=np.float64)
+    for i in range(n-1, -1, -1):
+        x[i] = (b[i] - np.dot(U[i, i+1:], x[i+1:])) / U[i, i]
+    return x
+
+
+# TEST DOKŁADNOŚCi
+
+print("--- ROZPOCZYNAM TEST DOKŁADNOŚCI ---")
+NUM_TRIALS = 5000 
+N_SIZE = 40
+
+errors_pivot = []
+errors_no_pivot = []
+ratios = []
+catastrophic_fails = 0  
+
+np.random.seed(42)
+
+for i in range(NUM_TRIALS):
+    A = np.random.rand(N_SIZE, N_SIZE) * 10.0
+    
+    P_piv, L_piv, U_piv = lu_factorization(A.copy(), pivoting=True)
+    P_np, L_np, U_np = lu_factorization(A.copy(), pivoting=False)
+    
+    err_piv = np.max(np.abs(P_piv @ A - L_piv @ U_piv))
+    err_np  = np.max(np.abs(P_np @ A - L_np @ U_np))
+    
+    errors_pivot.append(err_piv)
+    errors_no_pivot.append(err_np)
+    
+    if err_piv > 0:
+        ratios.append(err_np / err_piv)
+    else:
+        ratios.append(1.0)
+        
+    if err_np > 1.0 or np.isnan(err_np):
+        catastrophic_fails += 1
+
+errors_pivot = np.array(errors_pivot)
+errors_no_pivot = np.array(errors_no_pivot)
+ratios = np.array(ratios)
+
+fig, axes = plt.subplots(1, 2, figsize=(16, 7))
+axes[0].boxplot([errors_pivot, errors_no_pivot], labels=['Z pivotingiem', 'BEZ pivotingu'])
+axes[0].set_yscale('log')
+axes[0].set_ylabel('Maksymalny błąd $||PA - LU||_{\infty}$ (skala logarytmiczna)', fontsize=12)
+axes[0].set_title('Bezwzględny błąd rekonstrukcji macierzy', fontsize=14, fontweight='bold', pad=10)
+axes[0].grid(True, which="both", ls="--", alpha=0.5)
+
+lim_percentile = np.percentile(ratios, 90)
+ratios_clipped = ratios[ratios <= lim_percentile]
+
+axes[1].hist(ratios_clipped, bins=40, color='coral', edgecolor='black', alpha=0.7)
+axes[1].set_xlabel('Stosunek błędu (Błąd BEZ / Błąd Z)', fontsize=12)
+axes[1].set_ylabel('Liczba wystąpień', fontsize=12)
+axes[1].set_title(f'Jak bardzo pivoting zmniejsza błąd?\n(Histogram dla 90% najlepszych przypadków)', fontsize=14, fontweight='bold', pad=10)
+axes[1].grid(True, ls="--", alpha=0.5)
+
+plt.tight_layout()
+plt.savefig('dokladnosc_lu.png', dpi=300)
+plt.close() 
+
+
+
+
+# TEST PRĘDKOŚCI 
+N = 100
+K_values = [1, 10, 20, 50, 100]  
+np.random.seed(42)
+A_time = np.random.rand(N, N)
+
+gauss_times = []
+lu_times = []
+
+for K in K_values:
+    B_vectors = [np.random.rand(N) for _ in range(K)]
+    
+    start_gauss = time.time()
+    for b in B_vectors:
+        U_gauss, b_mod = gauss_numpy(A_time.copy(), b=b.copy())
+        x = back_substitution(U_gauss, b_mod)
+    gauss_times.append(time.time() - start_gauss)
+    
+    start_lu = time.time()
+    P, L, U = lu_factorization(A_time.copy())
+    for b in B_vectors:
+        y = forward_substitution(L, np.dot(P, b))
+        x = back_substitution(U, y)
+    lu_times.append(time.time() - start_lu)
+    
+    print(f"Liczba wektorów b = {K:3d} | Gauss: {gauss_times[-1]:.4f} s | LU: {lu_times[-1]:.4f} s")
+
+plt.figure(figsize=(10, 6))
+plt.plot(K_values, gauss_times, marker='o', label='Eliminacja Gaussa (od nowa za każdym razem)', color='red', linewidth=2)
+plt.plot(K_values, lu_times, marker='s', label='Faktoryzacja LU (faktoryzacja tylko raz)', color='green', linewidth=2)
+
+plt.title(f'Czas rozwiązywania układów równań w zależności od liczby wektorów prawych stron\n(Macierz $A$ o rozmiarze {N}x{N})', fontsize=14)
+plt.xlabel('Liczba różnych wektorów prawych stron (b)', fontsize=12)
+plt.ylabel('Całkowity czas wykonania [sekundy]', fontsize=12)
+plt.grid(True, linestyle='--', alpha=0.7)
+plt.legend(fontsize=11)
+plt.tight_layout()
+
+plt.savefig('czasy_gauss_vs_lu.png', dpi=300)
+plt.show()
